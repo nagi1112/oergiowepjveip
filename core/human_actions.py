@@ -79,6 +79,7 @@ class HumanActions:
             start[1] + dy * random.uniform(0.65, 0.85) + random.uniform(-spread, spread),
         )
         return cp1, cp2
+    
 
     async def move_mouse_to(self, tab: Any, target_x: float, target_y: float, steps: Optional[int] = None) -> None:
         start_x, start_y = self._get_cursor(tab)
