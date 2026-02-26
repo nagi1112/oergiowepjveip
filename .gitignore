@@ -1,0 +1,21 @@
+.venv/
+venv/
+__pycache__/
+*.log
+*.tmp
+*.bak
+
+# Track only Python files inside user_data
+user_data/**
+!user_data/
+!user_data/**/*.py
+
+# Track only Python files inside devop (root)
+devop/**
+!devop/
+!devop/**/*.py
+
+# Track only Python files inside core/devop
+core/devop/**
+!core/devop/
+!core/devop/**/*.py

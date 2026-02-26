@@ -1,8 +1,0 @@
-venv/
-user_data/
-__pycache__/
-*.log
-*.tmp
-*.bak
-git rm -r --cached user_data/
-git commit -m "Stop tracking user_data/"
