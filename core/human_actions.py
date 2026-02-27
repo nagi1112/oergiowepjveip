@@ -11,24 +11,24 @@ from .utils import async_sleep, jitter
 
 @dataclass(slots=True)
 class HumanProfile:
-    mouse_steps_min: int = 18
-    mouse_steps_max: int = 42
-    mouse_pause_min: float = 0.003
-    mouse_pause_max: float = 0.02
-    pre_click_pause_min: float = 0.05
-    pre_click_pause_max: float = 0.18
-    post_click_pause_min: float = 0.08
-    post_click_pause_max: float = 0.32
-    key_delay_min: float = 0.05
-    key_delay_max: float = 0.16
+    mouse_steps_min: int = 14
+    mouse_steps_max: int = 30
+    mouse_pause_min: float = 0.002
+    mouse_pause_max: float = 0.012
+    pre_click_pause_min: float = 0.03
+    pre_click_pause_max: float = 0.10
+    post_click_pause_min: float = 0.05
+    post_click_pause_max: float = 0.18
+    key_delay_min: float = 0.03
+    key_delay_max: float = 0.09
     key_thinking_pause_chance: float = 0.12
-    key_thinking_pause_min: float = 0.25
-    key_thinking_pause_max: float = 0.9
+    key_thinking_pause_min: float = 0.15
+    key_thinking_pause_max: float = 0.45
     mouse_visual_debug: bool = False
-    mouse_visual_debug_ttl_seconds: float = 5.0
-    mouse_visual_debug_step_min: int = 120
-    mouse_visual_debug_pause_min: float = 0.04
-    mouse_visual_debug_pause_max: float = 0.08
+    mouse_visual_debug_ttl_seconds: float = 2.5
+    mouse_visual_debug_step_min: int = 60
+    mouse_visual_debug_pause_min: float = 0.015
+    mouse_visual_debug_pause_max: float = 0.035
 
 
 class HumanActions:
@@ -368,14 +368,14 @@ class HumanActions:
             path_points.append((x, y))
             await self._dispatch_mouse_move(tab, x, y)
             await self._debug_draw_mouse_path(tab, x, y)
-            if self.profile.mouse_visual_debug:
+            if self.profile.mouse_visual_debug and (step == 1 or step == step_count or step % 10 == 0):
                 self._log("Движение мыши: шаг %s/%s -> (%.1f, %.1f)", step, step_count, x, y)
             await asyncio.sleep(jitter(pause_min, pause_max))
 
         self._set_cursor(tab, float(target_x), float(target_y))
         self._log("Движение мыши завершено: позиция=(%.1f, %.1f)", float(target_x), float(target_y))
         if self.profile.mouse_visual_debug:
-            hold_seconds = random.uniform(2.0, 3.0)
+            hold_seconds = random.uniform(1.0, 1.5)
             self._log("Показываю траекторию после движения %.1f сек", hold_seconds)
             await self._debug_show_path_snapshot(tab, path_points, hold_seconds)
 

@@ -19,8 +19,8 @@ async def click_non_ads_in_new_tabs(
     human: Any,
     parsed_results: list[dict[str, Any]],
     *,
-    limit: int = 3,
-    dwell_seconds: float = 2.0,
+    limit: int = 2,
+    dwell_seconds: float = 1.2,
     logger: Any = None,
 ) -> int:
     allowed_domains: set[str] = set()
@@ -87,7 +87,7 @@ async def click_non_ads_in_new_tabs(
                 clicked_buttons += 1
                 if logger:
                     logger.info("Клик по случайной кнопке на открытой вкладке: %s/%s", clicked_buttons, click_count)
-                await asyncio.sleep(random.uniform(0.4, 0.9))
+                await asyncio.sleep(random.uniform(0.2, 0.5))
             except Exception:
                 continue
 
