@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import os
 import random
 from contextlib import nullcontext
 from pathlib import Path
@@ -175,7 +176,7 @@ def build_proxy_browser_args(proxy: str, user_data_dir: Path) -> list[str]:
     _ = (username, password, user_data_dir)
     args = [f"--proxy-server={scheme}://{host}:{port}"]
     if sys.platform.startswith("linux"):
-        args.extend(["--no-sandbox", "--disable-dev-shm-usage"])
+        args.extend(["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"])
     return args
 
 
@@ -231,8 +232,11 @@ def _install_unraisable_noise_filter() -> None:
 
 
 def _runtime_display_context() -> Any:
-    # if not sys.platform.startswith("linux"):
-    return nullcontext()
+    if not sys.platform.startswith("linux"):
+        return nullcontext()
+
+    if os.environ.get("DISPLAY"):
+        return nullcontext()
 
     try:
         from pyvirtualdisplay import Display

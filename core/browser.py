@@ -69,7 +69,17 @@ def make_config(settings: BrowserSettings) -> Any:
 async def launch_browser(settings: BrowserSettings) -> Any:
     nodriver = _nodriver()
     config = make_config(settings)
-    return await nodriver.start(config=config)
+    try:
+        return await nodriver.start(config=config)
+    except Exception as exc:
+        message = str(exc)
+        if settings.no_sandbox and "Failed to connect to browser" in message:
+            return await nodriver.start(
+                config=config,
+                sandbox=False,
+                no_sandbox=True,
+            )
+        raise
 
 
 async def open_yandex(browser: Any, url: str = YANDEX_URL) -> Any:
