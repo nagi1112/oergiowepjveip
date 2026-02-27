@@ -19,8 +19,8 @@ async def click_non_ads_in_new_tabs(
     human: Any,
     parsed_results: list[dict[str, Any]],
     *,
-    limit: int = 2,
-    dwell_seconds: float = 1.2,
+    limit: int = 5,
+    dwell_seconds: float = 2.5,
     logger: Any = None,
 ) -> int:
     allowed_domains: set[str] = set()
@@ -59,7 +59,7 @@ async def click_non_ads_in_new_tabs(
         logger.info("Сценарий non-ads: кандидатных ссылок=%s", len(candidates))
 
     async def click_random_buttons_on_page(tab: Any) -> None:
-        click_count = random.randint(1, 2)
+        click_count = random.randint(0, 1)
         selectors = [
             "button",
             "[role='button']",
@@ -118,7 +118,10 @@ async def click_non_ads_in_new_tabs(
                 await tab.bring_to_front()
                 await tab.wait(1.2)
                 await click_random_buttons_on_page(tab)
-            await asyncio.sleep(dwell_seconds)
+            tab_dwell_seconds = random.uniform(2.0, 3.0)
+            if logger:
+                logger.info("Ожидание на открытой вкладке: %.1f сек", tab_dwell_seconds)
+            await asyncio.sleep(tab_dwell_seconds)
             clicked += 1
         except Exception as exc:
             if logger:

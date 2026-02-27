@@ -357,6 +357,14 @@ async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> N
     )
     human_profile = HumanProfile()
     human_profile.mouse_visual_debug = DEFAULT_MOUSE_VISUAL_DEBUG
+    human_profile.mouse_pause_min *= 1.2
+    human_profile.mouse_pause_max *= 1.2
+    human_profile.pre_click_pause_min *= 1.2
+    human_profile.pre_click_pause_max *= 1.2
+    human_profile.post_click_pause_min *= 1.2
+    human_profile.post_click_pause_max *= 1.2
+    human_profile.key_delay_min *= 1.2
+    human_profile.key_delay_max *= 1.2
     human = HumanActions(profile=human_profile, logger=logger)
 
     browser = await launch_browser(settings)
@@ -399,7 +407,7 @@ async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> N
                 for item in results[:10]:
                     logger.info("rank=%s domain=%s is_ad=%s", item.get("rank"), item.get("domain"), item.get("is_ad"))
 
-                non_ads_limit = random.randint(2, 3)
+                non_ads_limit = random.randint(5, 6)
                 logger.info("[%s/%s] Лимит non-ads на этот запрос: %s", index, total_queries, non_ads_limit)
                 clicked = await click_non_ads_in_new_tabs(
                     browser,
@@ -407,7 +415,7 @@ async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> N
                     human,
                     results,
                     limit=non_ads_limit,
-                    dwell_seconds=1.2,
+                    dwell_seconds=random.uniform(2.0, 3.0),
                     logger=logger,
                 )
                 logger.info("[%s/%s] Сценарий завершен: открыто не-рекламных ссылок=%s", index, total_queries, clicked)
