@@ -3,9 +3,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
-import math
+import importlib
 import random
-import time
 from typing import Any, Optional, Tuple
 
 import cv2
@@ -38,19 +37,27 @@ class CaptchaSolverNodriver:
         except Exception:
             await asyncio.sleep(seconds)
 
+    def _log(self, message: str, *args: Any) -> None:
+        if self.logger is None:
+            return
+        try:
+            self.logger.info(message, *args)
+        except Exception:
+            pass
+
     async def _cdp_mouse(self, type_: str, x: float, y: float,
                          button: str = "left", buttons: int = 0):
         """Отправка CDP-события мыши"""
+        nodriver = importlib.import_module("nodriver")
         await self.tab.send(
-            "Input.dispatchMouseEvent",
-            {
-                "type": type_,
-                "x": x,
-                "y": y,
-                "button": button,
-                "buttons": buttons,
-                "clickCount": 1,
-            }
+            nodriver.cdp.input_.dispatch_mouse_event(
+                type_,
+                x=float(x),
+                y=float(y),
+                button=button,
+                buttons=int(buttons),
+                click_count=1,
+            )
         )
 
     # ---------- Пазл-капча ----------
@@ -61,16 +68,13 @@ class CaptchaSolverNodriver:
             canvas = await self.tab.select("canvas.AdvancedCaptcha-KaleidoscopeCanvas", timeout=5)
             if not canvas:
                 return None
-            rect = await self.tab.evaluate(
-                """
-                (el) => {
-                    const r = el.getBoundingClientRect();
-                    return {left: r.left, top: r.top, width: r.width, height: r.height};
-                }
-                """,
-                canvas
-            )
-            return rect
+            position = await canvas.get_position()
+            return {
+                "left": float(position.left),
+                "top": float(position.top),
+                "width": float(position.width),
+                "height": float(position.height),
+            }
         except Exception:
             return None
 
@@ -85,7 +89,7 @@ class CaptchaSolverNodriver:
         img_full = cv2.imdecode(np.frombuffer(screenshot_png, np.uint8), cv2.IMREAD_COLOR)
 
         # Получаем devicePixelRatio
-        dpr = await self.tab.evaluate("window.devicePixelRatio || 1", return_by_value=True)
+        dpr = float(await self.tab.evaluate("window.devicePixelRatio || 1", return_by_value=True) or 1.0)
 
         left = int(rect["left"] * dpr)
         top = int(rect["top"] * dpr)
@@ -121,13 +125,13 @@ class CaptchaSolverNodriver:
             return False
 
         # Получаем координаты
-        rect_slider = await slider.rect()
-        rect_track = await track.rect()
+        rect_slider = await slider.get_position()
+        rect_track = await track.get_position()
 
-        cur_x = rect_slider["x"] + rect_slider["width"] / 2
-        cur_y = rect_slider["y"] + rect_slider["height"] / 2
-        track_left = rect_track["x"]
-        track_width = rect_track["width"]
+        cur_x = float(rect_slider.left) + float(rect_slider.width) / 2
+        cur_y = float(rect_slider.top) + float(rect_slider.height) / 2
+        track_left = float(rect_track.left)
+        track_width = float(rect_track.width)
         y_line = cur_y
 
         # Нажимаем на слайдер
@@ -236,8 +240,7 @@ class CaptchaSolverNodriver:
 
     async def solve_click_captcha(self) -> bool:
         """Решает клик-капчу через Anti-Captcha"""
-        if self.logger:
-            self.logger.info("Пытаюсь решить клик-капчу через Anti-Captcha...")
+        self._log("Пытаюсь решить клик-капчу через Anti-Captcha...")
 
         # Проверяем, точно ли это клик-капча
         html = await self.tab.get_content()
@@ -252,10 +255,12 @@ class CaptchaSolverNodriver:
         # Отправляем в Anti-Captcha
         task_id = await self._upload_to_anticaptcha(crop_bytes)
         if not task_id:
+            self._log("Anti-Captcha: task_id не получен")
             return False
 
         coords = await self._get_anticaptcha_result(task_id)
         if not coords:
+            self._log("Anti-Captcha: координаты не получены")
             return False
 
         # Конвертируем координаты из изображения в CSS-координаты окна
@@ -283,7 +288,9 @@ class CaptchaSolverNodriver:
         await self._click_submit_button()
         await self._sleep(1)
 
-        return not await self._is_captcha_present()
+        solved = not await self._is_captcha_present()
+        self._log("Результат клик-капчи: %s", "успех" if solved else "неуспех")
+        return solved
 
     async def _upload_to_anticaptcha(self, image_bytes: bytes) -> Optional[int]:
         """Загружает изображение в Anti-Captcha и возвращает taskId"""
@@ -302,6 +309,9 @@ class CaptchaSolverNodriver:
             timeout=30
         )
         data = resp.json()
+        if data.get("errorId"):
+            self._log("Anti-Captcha createTask error: %s", data)
+            return None
         return data.get("taskId")
 
     async def _get_anticaptcha_result(self, task_id: int, attempts=60, delay=5) -> Optional[list]:
@@ -314,6 +324,9 @@ class CaptchaSolverNodriver:
                 timeout=30
             )
             data = resp.json()
+            if data.get("errorId"):
+                self._log("Anti-Captcha getTaskResult error: %s", data)
+                return None
             if data.get("status") == "ready":
                 sol = data.get("solution", {})
                 coords = sol.get("coordinates")
@@ -325,19 +338,34 @@ class CaptchaSolverNodriver:
 
     async def _click_submit_button(self):
         """Нажимает кнопку подтверждения капчи"""
-        try:
-            btn = await self.tab.select("button[data-testid='submit']", timeout=3)
-            if btn:
-                await self.human.click_element(btn)
-                return
-        except Exception:
-            pass
+        selectors = [
+            "button[data-testid='submit']",
+            "button[type='submit']",
+            "button.AdvancedCaptcha-Button",
+            "button.Button2[role='button']",
+        ]
+        for selector in selectors:
+            try:
+                btn = await self.tab.select(selector, timeout=2)
+                if btn:
+                    self._log("Нажимаю submit по селектору: %s", selector)
+                    await self.human.click_element(btn)
+                    return
+            except Exception:
+                pass
+
         # Фолбэк: CDP-клик по центру кнопки
         try:
             rect = await self.tab.evaluate(
                 """
                 (() => {
-                    const btn = document.querySelector('button[data-testid="submit"]');
+                    const btn =
+                      document.querySelector('button[data-testid="submit"]') ||
+                      document.querySelector('button[type="submit"]') ||
+                      Array.from(document.querySelectorAll('button')).find((b) => {
+                        const t = (b.textContent || '').toLowerCase();
+                        return t.includes('подтверд') || t.includes('далее') || t.includes('submit');
+                      });
                     if (!btn) return null;
                     const r = btn.getBoundingClientRect();
                     return {x: r.left + r.width/2, y: r.top + r.height/2};
@@ -346,10 +374,25 @@ class CaptchaSolverNodriver:
                 return_by_value=True
             )
             if rect:
+                self._log("Нажимаю submit через координатный fallback")
                 await self.human.move_mouse_to(self.tab, rect["x"], rect["y"])
                 await self.tab.mouse_click(rect["x"], rect["y"])
         except Exception:
             pass
+
+    async def _captcha_kind(self) -> str:
+        try:
+            html = (await self.tab.get_content()).lower()
+        except Exception:
+            html = ""
+
+        if "нажмите в таком порядке" in html or 'data-testid="submit"' in html:
+            return "click"
+        if "перемещайте слайдер" in html or "captcha-slider" in html:
+            return "slider"
+        if "подтвердите, что запросы отправляли вы" in html or "js-button" in html:
+            return "confirm"
+        return "none"
 
     # ---------- Общий метод ----------
 
@@ -368,21 +411,25 @@ class CaptchaSolverNodriver:
         Умный решатель: определяет тип капчи и пытается решить.
         Возвращает True, если капча успешно пройдена.
         """
-        for attempt in range(max_attempts):
-            html = await self.tab.get_content()
-            if "Нажмите в таком порядке:" in html:
+        for attempt in range(1, max_attempts + 1):
+            kind = await self._captcha_kind()
+            self._log("Captcha attempt %s/%s, тип=%s", attempt, max_attempts, kind)
+
+            if kind == "none":
+                return True
+            if kind == "click":
                 if await self.solve_click_captcha():
                     return True
-            elif "Перемещайте слайдер" in html or "captcha-slider" in html:
+            elif kind == "slider":
                 if await self.solve_puzzle():
                     return True
-            elif "Подтвердите, что запросы отправляли вы" in html:
-                # Просто ждём кнопку "Я не робот" – она может быть в iframe
-                if await self._click_confirm_button():
-                    return True
-            else:
-                # Капчи нет
-                return True
+            elif kind == "confirm":
+                for _ in range(5):
+                    if await self._click_confirm_button():
+                        await self._sleep(1.0)
+                        if not await self._is_captcha_present():
+                            return True
+                    await self._sleep(0.8)
 
             await self._sleep(2)
 
@@ -391,6 +438,29 @@ class CaptchaSolverNodriver:
     async def _click_confirm_button(self) -> bool:
         """Пытается нажать кнопку 'Я не робот' (обычно в iframe)"""
         try:
+            js_clicked = await self.tab.evaluate(
+                """
+                (() => {
+                    const candidates = [
+                        document.querySelector('#js-button'),
+                        document.querySelector('button[data-testid="submit"]'),
+                        document.querySelector('button[type="submit"]'),
+                        ...Array.from(document.querySelectorAll('button')).filter((b) => {
+                            const t = (b.textContent || '').toLowerCase();
+                            return t.includes('я не робот') || t.includes('подтверд') || t.includes('continue');
+                        })
+                    ].filter(Boolean);
+                    if (!candidates.length) return false;
+                    candidates[0].click();
+                    return true;
+                })()
+                """,
+                return_by_value=True,
+            )
+            if bool(js_clicked):
+                self._log("Клик по confirm выполнен через JS")
+                return True
+
             # Ищем iframe с капчей
             frames = await self.tab.select_all("iframe")
             for frame in frames:
@@ -400,6 +470,7 @@ class CaptchaSolverNodriver:
                     btn = await self.tab.select("#js-button", timeout=2)
                     if btn:
                         await self.human.click_element(btn)
+                        self._log("Клик по confirm выполнен через элемент #js-button")
                         return True
                 except Exception:
                     pass
