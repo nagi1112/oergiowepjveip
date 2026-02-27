@@ -399,7 +399,7 @@ async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> N
                 for item in results[:10]:
                     logger.info("rank=%s domain=%s is_ad=%s", item.get("rank"), item.get("domain"), item.get("is_ad"))
 
-                non_ads_limit = random.randint(1, 2)
+                non_ads_limit = random.randint(3, 4)
                 logger.info("[%s/%s] Лимит non-ads на этот запрос: %s", index, total_queries, non_ads_limit)
                 clicked = await click_non_ads_in_new_tabs(
                     browser,
@@ -407,7 +407,7 @@ async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> N
                     human,
                     results,
                     limit=non_ads_limit,
-                    dwell_seconds=3.0,
+                    dwell_seconds=2.0,
                     logger=logger,
                 )
                 logger.info("[%s/%s] Сценарий завершен: открыто не-рекламных ссылок=%s", index, total_queries, clicked)
