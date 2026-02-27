@@ -18,7 +18,6 @@ class BrowserSettings:
     user_data_dir: Union[Path, str]
     profile_dir_name: str = "chrome_profile"
     headless: bool = False
-    no_sandbox: bool = False
     browser_executable_path: Optional[Union[Path, str]] = None
     browser_args: list[str] = field(default_factory=_default_browser_args)
     lang: str = "ru-RU"
@@ -57,8 +56,6 @@ def make_config(settings: BrowserSettings) -> Any:
     return nodriver.Config(
         user_data_dir=str(profile_dir),
         headless=settings.headless,
-        no_sandbox=settings.no_sandbox,
-        sandbox=not settings.no_sandbox,
         browser_executable_path=executable,
         browser_args=args,
         lang=settings.lang,
@@ -69,17 +66,7 @@ def make_config(settings: BrowserSettings) -> Any:
 async def launch_browser(settings: BrowserSettings) -> Any:
     nodriver = _nodriver()
     config = make_config(settings)
-    try:
-        return await nodriver.start(config=config)
-    except Exception as exc:
-        message = str(exc)
-        if settings.no_sandbox and "Failed to connect to browser" in message:
-            return await nodriver.start(
-                config=config,
-                sandbox=False,
-                no_sandbox=True,
-            )
-        raise
+    return await nodriver.start(config=config)
 
 
 async def open_yandex(browser: Any, url: str = YANDEX_URL) -> Any:

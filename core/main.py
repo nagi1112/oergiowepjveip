@@ -174,10 +174,7 @@ def _parse_proxy_url(proxy: str) -> tuple[str, str, int, str | None, str | None]
 def build_proxy_browser_args(proxy: str, user_data_dir: Path) -> list[str]:
     scheme, host, port, username, password = _parse_proxy_url(proxy)
     _ = (username, password, user_data_dir)
-    args = [f"--proxy-server={scheme}://{host}:{port}"]
-    if sys.platform.startswith("linux"):
-        args.extend(["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"])
-    return args
+    return [f"--proxy-server={scheme}://{host}:{port}"]
 
 
 def _fetch_cdp() -> Any:
@@ -460,7 +457,6 @@ async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> N
         user_data_dir=resolved_user_data_dir,
         profile_dir_name=DEFAULT_PROXY_PROFILE_DIR_NAME,
         headless=headless,
-        no_sandbox=sys.platform.startswith("linux"),
         browser_args=proxy_args,
     )
     human_profile = HumanProfile()
