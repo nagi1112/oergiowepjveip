@@ -16,6 +16,7 @@ def _default_browser_args() -> list[str]:
 @dataclass(slots=True)
 class BrowserSettings:
     user_data_dir: Union[Path, str]
+    profile_dir_name: str = "chrome_profile"
     headless: bool = False
     browser_executable_path: Optional[Union[Path, str]] = None
     browser_args: list[str] = field(default_factory=_default_browser_args)
@@ -44,7 +45,7 @@ def _normalize_dir_path(path_like: Union[Path, str]) -> Path:
 def make_config(settings: BrowserSettings) -> Any:
     nodriver = _nodriver()
     profile_root = _normalize_dir_path(settings.user_data_dir)
-    profile_dir = profile_root / "chrome_profile"
+    profile_dir = profile_root / settings.profile_dir_name
     profile_dir.mkdir(parents=True, exist_ok=True)
 
     executable = None
