@@ -18,6 +18,7 @@ class BrowserSettings:
     user_data_dir: Union[Path, str]
     profile_dir_name: str = "chrome_profile"
     headless: bool = False
+    no_sandbox: bool = False
     browser_executable_path: Optional[Union[Path, str]] = None
     browser_args: list[str] = field(default_factory=_default_browser_args)
     lang: str = "ru-RU"
@@ -56,6 +57,7 @@ def make_config(settings: BrowserSettings) -> Any:
     return nodriver.Config(
         user_data_dir=str(profile_dir),
         headless=settings.headless,
+        sandbox=not settings.no_sandbox,
         browser_executable_path=executable,
         browser_args=args,
         lang=settings.lang,

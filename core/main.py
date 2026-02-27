@@ -453,6 +453,7 @@ async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> N
         user_data_dir=resolved_user_data_dir,
         profile_dir_name=DEFAULT_PROXY_PROFILE_DIR_NAME,
         headless=headless,
+        no_sandbox=sys.platform.startswith("linux"),
         browser_args=proxy_args,
     )
     human_profile = HumanProfile()
