@@ -10,6 +10,11 @@ user_data/**
 !user_data/
 !user_data/**/*.py
 
+
+user_data_proxy/**
+!user_data_proxy/
+!user_data_proxy/**/*.py
+
 # Track only Python files inside devop (root)
 devop/**
 !devop/

@@ -19,9 +19,9 @@ async def click_non_ads_in_new_tabs(
     human: Any,
     parsed_results: list[dict[str, Any]],
     *,
-    limit: int = 5,
-    dwell_seconds: float = 2.5,
-    max_tab_seconds: float = 3.0,
+    limit: int = 3,
+    dwell_seconds: float = 3.5,
+    max_tab_seconds: float = 5.5,
     logger: Any = None,
 ) -> int:
     allowed_domains: set[str] = set()
@@ -63,7 +63,7 @@ async def click_non_ads_in_new_tabs(
         if remaining_seconds <= 0:
             return
 
-        click_count = random.randint(0, 1)
+        click_count = 1
         selector = "button, [role='button'], input[type='button'], input[type='submit'], a[role='button']"
 
         all_candidates: list[Any] = []
@@ -88,6 +88,25 @@ async def click_non_ads_in_new_tabs(
                     logger.info("Клик по случайной кнопке на открытой вкладке: %s/%s", clicked_buttons, click_count)
             except Exception:
                 continue
+
+        if clicked_buttons < 1:
+            try:
+                viewport = await tab.evaluate(
+                    "({w: Math.max(window.innerWidth, 1), h: Math.max(window.innerHeight, 1)})",
+                    return_by_value=True,
+                )
+                viewport_data = cast(dict[str, Any], viewport or {})
+                width = float(viewport_data.get("w", 1200))
+                height = float(viewport_data.get("h", 800))
+                x = random.uniform(width * 0.2, width * 0.8)
+                y = random.uniform(height * 0.2, height * 0.8)
+                await human.move_mouse_to(tab, x, y)
+                await tab.mouse_click(x, y)
+                clicked_buttons = 1
+                if logger:
+                    logger.info("Фолбэк: выполнен 1 случайный клик по странице")
+            except Exception:
+                pass
 
         if logger:
             logger.info("Случайных кликов по кнопкам выполнено: %s", clicked_buttons)
@@ -125,7 +144,7 @@ async def click_non_ads_in_new_tabs(
                     await click_random_buttons_on_page(opened_tab, remaining_for_clicks)
 
                     remaining_after_clicks = max(0.0, max_tab_seconds - (loop.time() - tab_started))
-                    tab_dwell_seconds = min(random.uniform(2.0, 3.0), dwell_seconds, remaining_after_clicks)
+                    tab_dwell_seconds = min(dwell_seconds, remaining_after_clicks)
                     if logger:
                         logger.info("Ожидание на открытой вкладке: %.1f сек", tab_dwell_seconds)
                     if tab_dwell_seconds > 0:

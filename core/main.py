@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import random
 from pathlib import Path
 import sys
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 if __package__ in (None, ""):
     project_root = Path(__file__).resolve().parents[1]
@@ -25,7 +27,7 @@ else:
     from .utils import setup_logging
 
 
-DEFAULT_USER_DATA_DIR = Path(r"C:\Users\savely\VSCodeProjects\yandex_search\user_data")
+DEFAULT_USER_DATA_DIR = Path(r"C:\Users\savely\VSCodeProjects\yandex_search\user_data_proxy")
 DEFAULT_PROXY_PROFILE_DIR_NAME = "chrome_profile_proxy"
 DEFAULT_PROXY = "user184655:9nft6e@166.1.226.195:3087"
 DEFAULT_HEADLESS = False
@@ -147,6 +149,68 @@ DEFAULT_QUERIES: list[str] = [
     "букет цветов с доставкой круглосуточно",
     "именные подарки с гравировкой",
 ]
+
+
+def _parse_proxy_url(proxy: str) -> tuple[str, str, int, str | None, str | None]:
+    raw_proxy = proxy.strip()
+    if not raw_proxy:
+        raise ValueError("Пустая строка прокси")
+
+    if "://" not in raw_proxy:
+        raw_proxy = f"http://{raw_proxy}"
+
+    parsed = urlsplit(raw_proxy)
+    if not parsed.hostname or not parsed.port:
+        raise ValueError(f"Некорректный формат прокси: {proxy}")
+
+    scheme = parsed.scheme or "http"
+    username = unquote(parsed.username) if parsed.username else None
+    password = unquote(parsed.password) if parsed.password else None
+    return scheme, parsed.hostname, parsed.port, username, password
+
+
+def build_proxy_browser_args(proxy: str, user_data_dir: Path) -> list[str]:
+    scheme, host, port, username, password = _parse_proxy_url(proxy)
+    _ = (username, password, user_data_dir)
+    return [f"--proxy-server={scheme}://{host}:{port}"]
+
+
+def _fetch_cdp() -> Any:
+    return importlib.import_module("nodriver.cdp.fetch")
+
+
+async def enable_proxy_auth(tab: Any, proxy: str, logger: Any) -> None:
+    _scheme, _host, _port, username, password = _parse_proxy_url(proxy)
+    if not username or not password:
+        return
+
+    fetch = _fetch_cdp()
+
+    async def _on_auth_required(event: Any) -> None:
+        try:
+            await tab.send(
+                fetch.continue_with_auth(
+                    event.request_id,
+                    fetch.AuthChallengeResponse(
+                        response="ProvideCredentials",
+                        username=username,
+                        password=password,
+                    ),
+                )
+            )
+        except Exception as exc:
+            logger.info("Не удалось отправить proxy auth credentials: %s", exc)
+
+    async def _on_request_paused(event: Any) -> None:
+        try:
+            await tab.send(fetch.continue_request(event.request_id))
+        except Exception as exc:
+            logger.info("Не удалось продолжить paused request: %s", exc)
+
+    tab.add_handler(fetch.AuthRequired, _on_auth_required)
+    tab.add_handler(fetch.RequestPaused, _on_request_paused)
+    await tab.send(fetch.enable(handle_auth_requests=True))
+    logger.info("Proxy auth handler активирован")
 
 
 def _install_unraisable_noise_filter() -> None:
@@ -289,6 +353,15 @@ async def wait_captcha_with_rechecks(tab: Any, logger: Any, timeout: float = 180
     return False
 
 
+def _is_stale_node_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "no node with given id found" in message
+        or "does not belong to the document" in message
+        or "code: -32000" in message
+    )
+
+
 async def submit_query(tab: Any, element: Any, human: HumanActions, logger: Any) -> None:
     submit_button = await find_submit_button(tab)
     if submit_button:
@@ -308,11 +381,17 @@ async def submit_query(tab: Any, element: Any, human: HumanActions, logger: Any)
     try:
         await human.press_enter(element)
     except Exception as exc:
-        if "No node with given id found" in str(exc):
+        if _is_stale_node_error(exc):
             logger.info("Элемент устарел после submit, переищу поле и повторю Enter")
             refreshed_input, _ = await find_search_input(tab)
             if refreshed_input:
-                await human.press_enter(refreshed_input)
+                try:
+                    await human.press_enter(refreshed_input)
+                except Exception as second_exc:
+                    if _is_stale_node_error(second_exc):
+                        logger.info("Поле снова устарело после submit — вероятно редирект/капча, продолжаю без повторного Enter")
+                    else:
+                        raise
         else:
             raise
 
@@ -353,11 +432,13 @@ async def wait_and_parse_results(tab: Any, timeout: float = 20.0) -> list[dict[s
 
 async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> None:
     logger = setup_logging()
+    resolved_user_data_dir = Path(user_data_dir).expanduser().resolve()
+    proxy_args = build_proxy_browser_args(DEFAULT_PROXY, resolved_user_data_dir)
     settings = BrowserSettings(
-        user_data_dir=Path(user_data_dir).expanduser().resolve(),
+        user_data_dir=resolved_user_data_dir,
         profile_dir_name=DEFAULT_PROXY_PROFILE_DIR_NAME,
         headless=headless,
-        browser_args=[f"--proxy-server=http://{DEFAULT_PROXY}"],
+        browser_args=proxy_args,
     )
     human_profile = HumanProfile()
     human_profile.mouse_visual_debug = DEFAULT_MOUSE_VISUAL_DEBUG
@@ -374,15 +455,15 @@ async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> N
     browser = await launch_browser(settings)
     try:
         tab = browser.main_tab
+        await enable_proxy_auth(tab, DEFAULT_PROXY, logger)
         await tab.wait(0.5)
         await tab.get("https://ya.ru/")
         await tab.wait(1.0)
         logger.info("Профиль: %s", Path(settings.user_data_dir).resolve())
-        random_query = random.choice(DEFAULT_QUERIES)
-        queries_to_run = [random_query]
-        logger.info("Выбран случайный запрос: %s", random_query)
+        queries_to_run = list(DEFAULT_QUERIES)
+        random.shuffle(queries_to_run)
+        logger.info("Всего запросов в очереди: %s (случайный порядок, без повторов)", len(queries_to_run))
 
-        for index, query in enumerate(queries_to_run, start=1):
         for index, query in enumerate(queries_to_run, start=1):
             try:
                 if index > 1:
@@ -411,15 +492,15 @@ async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> N
                 for item in results[:10]:
                     logger.info("rank=%s domain=%s is_ad=%s", item.get("rank"), item.get("domain"), item.get("is_ad"))
 
-                non_ads_limit = random.randint(5, 6)
-                logger.info("[%s/%s] Лимит non-ads на этот запрос: %s", index, total_queries, non_ads_limit)
+                non_ads_limit = random.randint(2, 3)
+                logger.info("[%s/%s] Лимит non-ads на этот запрос: %s", index, len(queries_to_run), non_ads_limit)
                 clicked = await click_non_ads_in_new_tabs(
                     browser,
                     tab,
                     human,
                     results,
                     limit=non_ads_limit,
-                    dwell_seconds=random.uniform(2.0, 3.0),
+                    dwell_seconds=random.uniform(3.0, 4.0),
                     logger=logger,
                 )
                 logger.info("[%s/%s] Сценарий завершен: открыто не-рекламных ссылок=%s", index, len(queries_to_run), clicked)

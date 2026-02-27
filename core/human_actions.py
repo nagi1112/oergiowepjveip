@@ -333,6 +333,19 @@ class HumanActions:
 
     async def move_mouse_to(self, tab: Any, target_x: float, target_y: float, steps: Optional[int] = None) -> None:
         start_x, start_y = self._get_cursor(tab)
+        if start_x == 0.0 and start_y == 0.0:
+            try:
+                viewport = await tab.evaluate(
+                    "({w: Math.max(window.innerWidth, 1), h: Math.max(window.innerHeight, 1)})",
+                    return_by_value=True,
+                )
+                width = float((viewport or {}).get("w", 1200))
+                height = float((viewport or {}).get("h", 800))
+                start_x = width * random.uniform(0.45, 0.55)
+                start_y = height * random.uniform(0.45, 0.55)
+                self._set_cursor(tab, start_x, start_y)
+            except Exception:
+                pass
         step_count = steps or random.randint(self.profile.mouse_steps_min, self.profile.mouse_steps_max)
         pause_min = self.profile.mouse_pause_min
         pause_max = self.profile.mouse_pause_max
