@@ -19,7 +19,7 @@ async def click_non_ads_in_new_tabs(
     human: Any,
     parsed_results: list[dict[str, Any]],
     *,
-    limit: int = 3,
+    limit: int = 2,
     dwell_seconds: float = 3.0,
     logger: Any = None,
 ) -> int:

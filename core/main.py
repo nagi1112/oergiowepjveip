@@ -27,7 +27,7 @@ else:
 
 DEFAULT_USER_DATA_DIR = Path(r"C:\Users\savely\VSCodeProjects\yandex_search\user_data")
 DEFAULT_HEADLESS = False
-DEFAULT_MOUSE_VISUAL_DEBUG = False
+DEFAULT_MOUSE_VISUAL_DEBUG = True
 DEFAULT_QUERIES: list[str] = [
     "тест",
     "купить машину",
@@ -357,7 +357,7 @@ async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> N
     )
     human_profile = HumanProfile()
     human_profile.mouse_visual_debug = DEFAULT_MOUSE_VISUAL_DEBUG
-    human = HumanActions(profile=human_profile)
+    human = HumanActions(profile=human_profile, logger=logger)
 
     browser = await launch_browser(settings)
     try:
@@ -367,37 +367,40 @@ async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> N
         await tab.wait(1.0)
         logger.info("Профиль: %s", Path(settings.user_data_dir).resolve())
         logger.info("Всего запросов в очереди: %s", len(DEFAULT_QUERIES))
+        queries_to_run = random.sample(DEFAULT_QUERIES, k=len(DEFAULT_QUERIES))
+        total_queries = len(queries_to_run)
+        logger.info("Запросы перемешаны случайным образом, к выполнению: %s", total_queries)
 
-        for index, query in enumerate(DEFAULT_QUERIES, start=1):
+        for index, query in enumerate(queries_to_run, start=1):
             try:
                 if index > 1:
                     clear_button = await find_clear_button(tab)
                     if clear_button:
-                        logger.info("[%s/%s] Нажимаю крестик очистки", index, len(DEFAULT_QUERIES))
+                        logger.info("[%s/%s] Нажимаю крестик очистки", index, total_queries)
                         await human.click_element(clear_button)
                         await tab.wait(0.4)
 
                 element, selector = await find_search_input(tab)
-                logger.info("[%s/%s] Input найден: %s", index, len(DEFAULT_QUERIES), bool(element))
-                logger.info("[%s/%s] Селектор: %s", index, len(DEFAULT_QUERIES), selector)
+                logger.info("[%s/%s] Input найден: %s", index, total_queries, bool(element))
+                logger.info("[%s/%s] Селектор: %s", index, total_queries, selector)
                 if not element:
-                    logger.info("[%s/%s] Поле поиска не найдено, пропускаю запрос: %s", index, len(DEFAULT_QUERIES), query)
+                    logger.info("[%s/%s] Поле поиска не найдено, пропускаю запрос: %s", index, total_queries, query)
                     continue
 
                 await human.type_text(element, query, clear_before=True)
                 if not await wait_input_value(element, query, timeout=5.0):
                     current_value = await read_input_value(element)
-                    logger.info("[%s/%s] Значение поля не стабилизировалось. Текущее: %s", index, len(DEFAULT_QUERIES), current_value)
+                    logger.info("[%s/%s] Значение поля не стабилизировалось. Текущее: %s", index, total_queries, current_value)
 
                 await submit_query(tab, element, human, logger)
-                logger.info("[%s/%s] Запрос введён: %s", index, len(DEFAULT_QUERIES), query)
+                logger.info("[%s/%s] Запрос введён: %s", index, total_queries, query)
                 results = await wait_and_parse_results(tab, timeout=20)
-                logger.info("[%s/%s] Результатов спарсено: %s", index, len(DEFAULT_QUERIES), len(results))
+                logger.info("[%s/%s] Результатов спарсено: %s", index, total_queries, len(results))
                 for item in results[:10]:
                     logger.info("rank=%s domain=%s is_ad=%s", item.get("rank"), item.get("domain"), item.get("is_ad"))
 
-                non_ads_limit = random.randint(3, 4)
-                logger.info("[%s/%s] Лимит non-ads на этот запрос: %s", index, len(DEFAULT_QUERIES), non_ads_limit)
+                non_ads_limit = random.randint(1, 2)
+                logger.info("[%s/%s] Лимит non-ads на этот запрос: %s", index, total_queries, non_ads_limit)
                 clicked = await click_non_ads_in_new_tabs(
                     browser,
                     tab,
@@ -407,10 +410,10 @@ async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> N
                     dwell_seconds=3.0,
                     logger=logger,
                 )
-                logger.info("[%s/%s] Сценарий завершен: открыто не-рекламных ссылок=%s", index, len(DEFAULT_QUERIES), clicked)
+                logger.info("[%s/%s] Сценарий завершен: открыто не-рекламных ссылок=%s", index, total_queries, clicked)
                 await tab.wait(0.8)
             except Exception as exc:
-                logger.info("[%s/%s] Ошибка на запросе '%s': %s", index, len(DEFAULT_QUERIES), query, exc)
+                logger.info("[%s/%s] Ошибка на запросе '%s': %s", index, total_queries, query, exc)
                 await tab.wait(1.0)
                 continue
     finally:
