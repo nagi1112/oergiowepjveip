@@ -10,6 +10,8 @@ CAPTCHA_MARKERS = (
     "Нажмите в таком порядке",
     "подтвердите, что запросы отправляли вы, а не робот",
     "перемещайте слайдер",
+    "captcha-slider",
+    "advancedcaptcha",
 )
 
 
@@ -38,6 +40,30 @@ async def has_active_search_tab(tab: Any) -> bool:
 
 
 async def has_captcha(tab: Any) -> bool:
+    try:
+        has_captcha_dom = await tab.evaluate(
+            """
+            (() => {
+              const selectors = [
+                '#captcha-slider',
+                '.CaptchaSlider',
+                '.AdvancedCaptcha',
+                'canvas.AdvancedCaptcha-KaleidoscopeCanvas',
+                'button[data-testid="submit"]',
+                'iframe[src*="captcha"]',
+                '[id*="captcha"]',
+                '[class*="captcha"]'
+              ];
+              return selectors.some((selector) => document.querySelector(selector));
+            })()
+            """,
+            return_by_value=True,
+        )
+        if bool(has_captcha_dom):
+            return True
+    except Exception:
+        pass
+
     try:
         body_text = await tab.evaluate("document.body ? (document.body.innerText || '') : ''", return_by_value=True)
         normalized_text = str(body_text or "").lower()

@@ -439,6 +439,16 @@ async def wait_and_parse_results(tab: Any, timeout: float = 20.0) -> list[dict[s
     return last_results
 
 
+async def wait_captcha_appearance(tab: Any, timeout: float = 6.0, step: float = 0.4) -> bool:
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    while loop.time() - started < timeout:
+        if await has_captcha(tab):
+            return True
+        await tab.wait(step)
+    return False
+
+
 async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> None:
     logger = setup_logging()
     resolved_user_data_dir = Path(user_data_dir).expanduser().resolve()
@@ -496,7 +506,8 @@ async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> N
 
                 await submit_query(tab, element, human, logger)
 
-                if await has_captcha(tab):
+                captcha_detected = await wait_captcha_appearance(tab, timeout=6.0, step=0.4)
+                if captcha_detected:
                     solver = CaptchaSolverNodriver(tab, human, logger)
                     if await solver.solve_smart(max_attempts=3):
                         logger.info("[%s/%s] Капча успешно решена", index, len(queries_to_run))
