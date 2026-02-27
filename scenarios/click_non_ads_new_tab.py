@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import random
+from typing import Any, cast
 from urllib.parse import urlparse
 
 
@@ -57,6 +58,42 @@ async def click_non_ads_in_new_tabs(
     if logger:
         logger.info("Сценарий non-ads: кандидатных ссылок=%s", len(candidates))
 
+    async def click_random_buttons_on_page(tab: Any) -> None:
+        click_count = random.randint(2, 3)
+        selectors = [
+            "button",
+            "[role='button']",
+            "input[type='button']",
+            "input[type='submit']",
+            "a[role='button']",
+        ]
+
+        all_candidates: list[Any] = []
+        for selector in selectors:
+            try:
+                elements = await tab.select_all(selector, timeout=2)
+            except Exception:
+                elements = []
+            for element in cast(list[Any], elements):
+                all_candidates.append(element)
+
+        random.shuffle(all_candidates)
+        clicked_buttons = 0
+        for element in all_candidates:
+            if clicked_buttons >= click_count:
+                break
+            try:
+                await human.click_element(element)
+                clicked_buttons += 1
+                if logger:
+                    logger.info("Клик по случайной кнопке на открытой вкладке: %s/%s", clicked_buttons, click_count)
+                await asyncio.sleep(random.uniform(2.0, 4.0))
+            except Exception:
+                continue
+
+        if logger:
+            logger.info("Случайных кликов по кнопкам выполнено: %s", clicked_buttons)
+
     clicked = 0
     for anchor in candidates:
         tab = None
@@ -80,6 +117,7 @@ async def click_non_ads_in_new_tabs(
             if tab is not None:
                 await tab.bring_to_front()
                 await tab.wait(1.2)
+                await click_random_buttons_on_page(tab)
             await asyncio.sleep(dwell_seconds)
             clicked += 1
         except Exception as exc:

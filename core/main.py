@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from pathlib import Path
 import sys
 from typing import Any
@@ -10,14 +11,14 @@ if __package__ in (None, ""):
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
     from core.browser import BrowserSettings, launch_browser, shutdown_browser
-    from core.human_actions import HumanActions
+    from core.human_actions import HumanActions, HumanProfile
     from core.captcha import has_captcha
     from core.pars_page import find_domens
     from scenarios.click_non_ads_new_tab import click_non_ads_in_new_tabs
     from core.utils import setup_logging
 else:
     from .browser import BrowserSettings, launch_browser, shutdown_browser
-    from .human_actions import HumanActions
+    from .human_actions import HumanActions, HumanProfile
     from .captcha import has_captcha
     from .pars_page import find_domens
     from scenarios.click_non_ads_new_tab import click_non_ads_in_new_tabs
@@ -26,6 +27,7 @@ else:
 
 DEFAULT_USER_DATA_DIR = Path(r"C:\Users\savely\VSCodeProjects\yandex_search\user_data")
 DEFAULT_HEADLESS = False
+DEFAULT_MOUSE_VISUAL_DEBUG = False
 DEFAULT_QUERIES: list[str] = [
     "тест",
     "купить машину",
@@ -240,6 +242,7 @@ async def is_serp_loaded(tab: Any) -> bool:
 async def wait_captcha_with_rechecks(tab: Any, logger: Any, timeout: float = 180.0, step: float = 7.0) -> bool:
     loop = asyncio.get_running_loop()
     started = loop.time()
+    reloaded_once = False
 
     while loop.time() - started < timeout:
         if not await has_captcha(tab):
@@ -248,12 +251,38 @@ async def wait_captcha_with_rechecks(tab: Any, logger: Any, timeout: float = 180
         elapsed = int(loop.time() - started)
         logger.info("Капча всё ещё активна (%s сек), повторная проверка через %s сек...", elapsed, int(step))
         await tab.wait(step)
-        try:
-            logger.info("Капча не ушла, делаю reload страницы перед новой проверкой")
-            await tab.reload()
-            await tab.wait(1.2)
-        except Exception as exc:
-            logger.info("Не удалось выполнить reload при проверке капчи: %s", exc)
+
+        if not reloaded_once:
+            try:
+                logger.info("Капча не ушла, делаю reload страницы перед новой проверкой")
+                await tab.reload()
+                await tab.wait(1.2)
+                reloaded_once = True
+            except Exception as exc:
+                logger.info("Не удалось выполнить reload при проверке капчи: %s", exc)
+                reloaded_once = True
+            continue
+
+        logger.info("Капча всё ещё активна после reload, жду ручное решение и проверяю HTML каждые 5 сек...")
+        while True:
+            try:
+                html = (await tab.get_content()).lower()
+            except Exception:
+                html = ""
+
+            has_captcha_marker = (
+                "подтвердите, что запросы отправляли вы, а не робот" in html
+                or "перемещайте слайдер" in html
+                or "нажмите в таком порядке" in html
+            )
+
+            if not has_captcha_marker and not await has_captcha(tab):
+                logger.info("Капча пройдена вручную, продолжаю работу")
+                return True
+
+            elapsed = int(loop.time() - started)
+            logger.info("Капча всё ещё активна (%s сек), повторная HTML-проверка через 5 сек...", elapsed)
+            await tab.wait(5)
 
     return False
 
@@ -326,12 +355,16 @@ async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> N
         user_data_dir=Path(user_data_dir).expanduser().resolve(),
         headless=headless,
     )
-    human = HumanActions()
+    human_profile = HumanProfile()
+    human_profile.mouse_visual_debug = DEFAULT_MOUSE_VISUAL_DEBUG
+    human = HumanActions(profile=human_profile)
 
     browser = await launch_browser(settings)
     try:
         tab = browser.main_tab
         await tab.wait(0.5)
+        await tab.get("https://ya.ru/")
+        await tab.wait(1.0)
         logger.info("Профиль: %s", Path(settings.user_data_dir).resolve())
         logger.info("Всего запросов в очереди: %s", len(DEFAULT_QUERIES))
 
@@ -363,12 +396,14 @@ async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> N
                 for item in results[:10]:
                     logger.info("rank=%s domain=%s is_ad=%s", item.get("rank"), item.get("domain"), item.get("is_ad"))
 
+                non_ads_limit = random.randint(3, 4)
+                logger.info("[%s/%s] Лимит non-ads на этот запрос: %s", index, len(DEFAULT_QUERIES), non_ads_limit)
                 clicked = await click_non_ads_in_new_tabs(
                     browser,
                     tab,
                     human,
                     results,
-                    limit=3,
+                    limit=non_ads_limit,
                     dwell_seconds=3.0,
                     logger=logger,
                 )

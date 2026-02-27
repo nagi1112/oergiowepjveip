@@ -24,6 +24,8 @@ class HumanProfile:
     key_thinking_pause_chance: float = 0.12
     key_thinking_pause_min: float = 0.25
     key_thinking_pause_max: float = 0.9
+    mouse_visual_debug: bool = False
+    mouse_visual_debug_ttl_seconds: float = 5.0
 
 
 class HumanActions:
@@ -46,6 +48,87 @@ class HumanActions:
     async def _dispatch_mouse_move(self, tab: Any, x: float, y: float) -> None:
         nodriver = self._nodriver()
         await tab.send(nodriver.cdp.input_.dispatch_mouse_event("mouseMoved", x=float(x), y=float(y)))
+
+    async def _debug_draw_mouse_path(self, tab: Any, x: float, y: float, reset: bool = False) -> None:
+        if not self.profile.mouse_visual_debug:
+            return
+
+        script = """
+        (payload) => {
+          const ensure = () => {
+            if (window.__humanMouseDebug) {
+              return window.__humanMouseDebug;
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.id = '__human_mouse_debug_canvas';
+            canvas.style.position = 'fixed';
+            canvas.style.left = '0';
+            canvas.style.top = '0';
+            canvas.style.width = '100vw';
+            canvas.style.height = '100vh';
+            canvas.style.pointerEvents = 'none';
+            canvas.style.zIndex = '2147483647';
+            document.documentElement.appendChild(canvas);
+
+                        const state = {
+              canvas,
+              ctx: canvas.getContext('2d'),
+              points: []
+            };
+
+            const resize = () => {
+              const dpr = window.devicePixelRatio || 1;
+              const w = Math.max(window.innerWidth, 1);
+              const h = Math.max(window.innerHeight, 1);
+              canvas.width = Math.floor(w * dpr);
+              canvas.height = Math.floor(h * dpr);
+              canvas.style.width = `${w}px`;
+              canvas.style.height = `${h}px`;
+              state.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            };
+
+            resize();
+            window.addEventListener('resize', resize, { passive: true });
+            window.__humanMouseDebug = state;
+            return state;
+          };
+
+          const state = ensure();
+                    if (payload.reset) {
+            state.points = [];
+          }
+
+                    state.points.push({ x: payload.x, y: payload.y, ts: Date.now() });
+                    const cutoff = Date.now() - payload.ttlMs;
+                    state.points = state.points.filter((point) => point.ts >= cutoff);
+          const ctx = state.ctx;
+          const w = Math.max(window.innerWidth, 1);
+          const h = Math.max(window.innerHeight, 1);
+          ctx.clearRect(0, 0, w, h);
+
+          if (state.points.length > 1) {
+            ctx.beginPath();
+            ctx.moveTo(state.points[0].x, state.points[0].y);
+            for (let i = 1; i < state.points.length; i += 1) {
+              ctx.lineTo(state.points[i].x, state.points[i].y);
+            }
+            ctx.strokeStyle = 'rgba(255, 80, 80, 0.9)';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+          }
+
+          const p = state.points[state.points.length - 1];
+          if (p) {
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(70, 180, 255, 0.95)';
+            ctx.fill();
+          }
+        }
+        """
+        ttl_ms = max(1000, int(self.profile.mouse_visual_debug_ttl_seconds * 1000))
+        await tab.evaluate(script, {"x": float(x), "y": float(y), "reset": bool(reset), "ttlMs": ttl_ms})
 
     def _bezier_point(
         self,
@@ -79,7 +162,6 @@ class HumanActions:
             start[1] + dy * random.uniform(0.65, 0.85) + random.uniform(-spread, spread),
         )
         return cp1, cp2
-    
 
     async def move_mouse_to(self, tab: Any, target_x: float, target_y: float, steps: Optional[int] = None) -> None:
         start_x, start_y = self._get_cursor(tab)
@@ -90,12 +172,15 @@ class HumanActions:
         p3 = (float(target_x), float(target_y))
         p1, p2 = self._control_points(p0, p3)
 
+        await self._debug_draw_mouse_path(tab, p0[0], p0[1], reset=True)
+
         for step in range(1, step_count + 1):
             t = step / step_count
             x, y = self._bezier_point(t, p0, p1, p2, p3)
             x += random.uniform(-0.55, 0.55)
             y += random.uniform(-0.55, 0.55)
             await self._dispatch_mouse_move(tab, x, y)
+            await self._debug_draw_mouse_path(tab, x, y)
             await asyncio.sleep(jitter(self.profile.mouse_pause_min, self.profile.mouse_pause_max))
 
         self._set_cursor(tab, float(target_x), float(target_y))
