@@ -35,7 +35,7 @@ class HumanActions:
     def __init__(self, profile: Optional[HumanProfile] = None, logger: Any = None) -> None:
         self.profile = profile or HumanProfile()
         self.logger = logger
-        self._cursor_positions: dict[int, tuple[float, float]] = {}
+        self._cursor_position: tuple[float, float] = (0.0, 0.0)
 
     def _log(self, message: str, *args: Any) -> None:
         if self.logger is None:
@@ -52,10 +52,10 @@ class HumanActions:
         return importlib.import_module("nodriver")
 
     def _get_cursor(self, tab: Any) -> tuple[float, float]:
-        return self._cursor_positions.get(self._tab_key(tab), (0.0, 0.0))
+        return self._cursor_position
 
     def _set_cursor(self, tab: Any, x: float, y: float) -> None:
-        self._cursor_positions[self._tab_key(tab)] = (x, y)
+        self._cursor_position = (x, y)
 
     async def _dispatch_mouse_move(self, tab: Any, x: float, y: float) -> None:
         nodriver = self._nodriver()
