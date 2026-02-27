@@ -57,6 +57,7 @@ def make_config(settings: BrowserSettings) -> Any:
     return nodriver.Config(
         user_data_dir=str(profile_dir),
         headless=settings.headless,
+        no_sandbox=settings.no_sandbox,
         sandbox=not settings.no_sandbox,
         browser_executable_path=executable,
         browser_args=args,

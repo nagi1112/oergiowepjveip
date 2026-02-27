@@ -173,7 +173,10 @@ def _parse_proxy_url(proxy: str) -> tuple[str, str, int, str | None, str | None]
 def build_proxy_browser_args(proxy: str, user_data_dir: Path) -> list[str]:
     scheme, host, port, username, password = _parse_proxy_url(proxy)
     _ = (username, password, user_data_dir)
-    return [f"--proxy-server={scheme}://{host}:{port}"]
+    args = [f"--proxy-server={scheme}://{host}:{port}"]
+    if sys.platform.startswith("linux"):
+        args.extend(["--no-sandbox", "--disable-dev-shm-usage"])
+    return args
 
 
 def _fetch_cdp() -> Any:
