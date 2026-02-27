@@ -228,8 +228,8 @@ def _install_unraisable_noise_filter() -> None:
 
 
 def _runtime_display_context() -> Any:
-    if not sys.platform.startswith("linux"):
-        return nullcontext()
+    # if not sys.platform.startswith("linux"):
+    return nullcontext()
 
     try:
         from pyvirtualdisplay import Display
