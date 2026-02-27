@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import random
+from contextlib import nullcontext
 from pathlib import Path
 import sys
 from typing import Any
@@ -27,7 +28,7 @@ else:
     from .utils import setup_logging
 
 
-DEFAULT_USER_DATA_DIR = Path(r"C:\Users\savely\VSCodeProjects\yandex_search\user_data_proxy")
+DEFAULT_USER_DATA_DIR = Path("user_data_proxy")
 DEFAULT_PROXY_PROFILE_DIR_NAME = "chrome_profile_proxy"
 DEFAULT_PROXY = "user184655:9nft6e@166.1.226.195:3087"
 DEFAULT_HEADLESS = False
@@ -224,6 +225,20 @@ def _install_unraisable_noise_filter() -> None:
         original_hook(unraisable)
 
     sys.unraisablehook = filtered_hook
+
+
+def _runtime_display_context() -> Any:
+    if not sys.platform.startswith("linux"):
+        return nullcontext()
+
+    try:
+        from pyvirtualdisplay import Display
+    except Exception as exc:
+        raise RuntimeError(
+            "Для запуска на Linux установите pyvirtualdisplay: pip install pyvirtualdisplay"
+        ) from exc
+
+    return Display(visible=0, size=(1920, 1080))
 
 
 async def find_search_input(tab: Any) -> tuple[Any, str | None]:
@@ -517,12 +532,13 @@ async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> N
 
 def main() -> None:
     _install_unraisable_noise_filter()
-    asyncio.run(
-        smoke_open_and_close(
-            user_data_dir=DEFAULT_USER_DATA_DIR,
-            headless=DEFAULT_HEADLESS,
+    with _runtime_display_context():
+        asyncio.run(
+            smoke_open_and_close(
+                user_data_dir=DEFAULT_USER_DATA_DIR,
+                headless=DEFAULT_HEADLESS,
+            )
         )
-    )
 
 
 if __name__ == "__main__":
