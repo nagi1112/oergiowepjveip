@@ -17,6 +17,7 @@ if __package__ in (None, ""):
     from core.browser import BrowserSettings, launch_browser, shutdown_browser
     from core.human_actions import HumanActions, HumanProfile
     from core.captcha import has_captcha
+    from core.captcha_solver_nodriver import CaptchaSolverNodriver
     from core.pars_page import find_domens
     from scenarios.click_non_ads_new_tab import click_non_ads_in_new_tabs
     from core.utils import setup_logging
@@ -24,6 +25,7 @@ else:
     from .browser import BrowserSettings, launch_browser, shutdown_browser
     from .human_actions import HumanActions, HumanProfile
     from .captcha import has_captcha
+    from .captcha_solver_nodriver import CaptchaSolverNodriver
     from .pars_page import find_domens
     from scenarios.click_non_ads_new_tab import click_non_ads_in_new_tabs
     from .utils import setup_logging
@@ -388,12 +390,6 @@ async def submit_query(tab: Any, element: Any, human: HumanActions, logger: Any)
         await human.click_element(submit_button)
         await tab.wait(1.2)
 
-        if await has_captcha(tab):
-            logger.info("Обнаружена капча после клика Найти, жду ручное прохождение...")
-            solved = await wait_captcha_with_rechecks(tab, logger, timeout=180, step=7)
-            logger.info("Капча после клика Найти: %s", "пройдена" if solved else "не пройдена (таймаут)")
-            return
-
         if await is_serp_loaded(tab):
             return
 
@@ -415,12 +411,6 @@ async def submit_query(tab: Any, element: Any, human: HumanActions, logger: Any)
             raise
 
     await tab.wait(1.2)
-
-    if await has_captcha(tab):
-        logger.info("Обнаружена капча после Enter, жду ручное прохождение...")
-        solved = await wait_captcha_with_rechecks(tab, logger, timeout=180, step=7)
-        logger.info("Капча после Enter: %s", "пройдена" if solved else "не пройдена (таймаут)")
-        return
 
     if await is_serp_loaded(tab):
         return
@@ -505,6 +495,19 @@ async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> N
                     logger.info("[%s/%s] Значение поля не стабилизировалось. Текущее: %s", index, len(queries_to_run), current_value)
 
                 await submit_query(tab, element, human, logger)
+
+                if await has_captcha(tab):
+                    solver = CaptchaSolverNodriver(tab, human, logger)
+                    if await solver.solve_smart(max_attempts=3):
+                        logger.info("[%s/%s] Капча успешно решена", index, len(queries_to_run))
+                    else:
+                        logger.warning("[%s/%s] Не удалось решить капчу за попытки", index, len(queries_to_run))
+                        logger.info("[%s/%s] Перехожу к ручному ожиданию прохождения капчи", index, len(queries_to_run))
+                        solved = await wait_captcha_with_rechecks(tab, logger, timeout=180, step=7)
+                        if not solved:
+                            logger.warning("[%s/%s] Капча не пройдена (таймаут), пропускаю запрос", index, len(queries_to_run))
+                            continue
+
                 logger.info("[%s/%s] Запрос введён: %s", index, len(queries_to_run), query)
                 results = await wait_and_parse_results(tab, timeout=20)
                 logger.info("[%s/%s] Результатов спарсено: %s", index, len(queries_to_run), len(results))
