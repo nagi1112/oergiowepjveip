@@ -225,18 +225,78 @@ class CaptchaSolverNodriver:
 
     async def _screenshot_crop_center(self) -> Optional[bytes]:
         """Скриншот центральной области и возврат PNG-байтов"""
-        rect = await self._get_captcha_center_rect()
-        if not rect:
-            return None
+        for attempt in range(1, 4):
+            try:
+                full_png = await self.tab.screenshot()
+                if not full_png:
+                    self._log("Кроп капчи: пустой скриншот (attempt %s/3)", attempt)
+                    await self._sleep(0.4)
+                    continue
 
-        full_png = await self.tab.screenshot()
-        full = Image.open(io.BytesIO(full_png)).convert("RGB")
-        cropped = full.crop((rect["left"], rect["top"],
-                             rect["left"] + rect["width"],
-                             rect["top"] + rect["height"]))
-        buf = io.BytesIO()
-        cropped.save(buf, format="PNG")
-        return buf.getvalue()
+                full = Image.open(io.BytesIO(full_png)).convert("RGB")
+                img_w, img_h = full.size
+
+                try:
+                    dpr_val = await self.tab.evaluate("window.devicePixelRatio || 1", return_by_value=True)
+                    dpr = float(dpr_val or 1.0)
+                except Exception:
+                    dpr = 1.0
+
+                rect = await self._get_captcha_center_rect()
+                if rect:
+                    left = int(float(rect["left"]) * dpr)
+                    top = int(float(rect["top"]) * dpr)
+                    crop_w = int(float(rect["width"]) * dpr)
+                    crop_h = int(float(rect["height"]) * dpr)
+                else:
+                    self._log("Кроп капчи: не удалось получить viewport-rect, беру центр от размеров скриншота")
+                    crop_w = int(img_w * 0.3484375)
+                    crop_h = int(img_h * 0.49237805)
+                    left = (img_w - crop_w) // 2
+                    top = (img_h - crop_h) // 2
+
+                left = max(0, min(left, img_w - 1))
+                top = max(0, min(top, img_h - 1))
+                right = max(left + 1, min(left + crop_w, img_w))
+                bottom = max(top + 1, min(top + crop_h, img_h))
+
+                if right <= left or bottom <= top:
+                    self._log(
+                        "Кроп капчи: некорректные границы left=%s top=%s right=%s bottom=%s img=%sx%s (attempt %s/3)",
+                        left,
+                        top,
+                        right,
+                        bottom,
+                        img_w,
+                        img_h,
+                        attempt,
+                    )
+                    await self._sleep(0.4)
+                    continue
+
+                cropped = full.crop((left, top, right, bottom))
+                buf = io.BytesIO()
+                cropped.save(buf, format="PNG")
+                data = buf.getvalue()
+                if data:
+                    self._log(
+                        "Кроп капчи: успешно, размер=%s байт, область=(%s,%s)-(%s,%s), dpr=%.2f",
+                        len(data),
+                        left,
+                        top,
+                        right,
+                        bottom,
+                        dpr,
+                    )
+                    return data
+
+                self._log("Кроп капчи: пустой результат после crop (attempt %s/3)", attempt)
+            except Exception as exc:
+                self._log("Кроп капчи exception (attempt %s/3): %s", attempt, exc)
+
+            await self._sleep(0.4)
+
+        return None
 
     async def solve_click_captcha(self) -> bool:
         """Решает клик-капчу через Anti-Captcha"""
