@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import inspect
 import io
 import importlib
+import os
 import random
+import tempfile
 from typing import Any, Optional, Tuple
 
 import cv2
 import numpy as np
 from PIL import Image
 
+from .captcha import has_captcha
 from .human_actions import HumanActions
 from .image_processor import ImageProcessor  # ваш существующий image_processor
 
@@ -74,7 +78,31 @@ class CaptchaSolverNodriver:
             except Exception as exc:
                 self._log("Скриншот через tab.screenshot не удался: %s", exc)
 
-        # 2) CDP fallback: Page.captureScreenshot
+        # 2) Метод tab.save_screenshot (актуален для части версий nodriver)
+        save_screenshot_method = getattr(self.tab, "save_screenshot", None)
+        if callable(save_screenshot_method):
+            tmp_path = None
+            try:
+                fd, tmp_path = tempfile.mkstemp(suffix=".png", prefix="nd_cap_")
+                os.close(fd)
+                maybe_path = save_screenshot_method(filename=tmp_path, format="png", full_page=False)
+                saved_path = await maybe_path if inspect.isawaitable(maybe_path) else maybe_path
+                target_path = str(saved_path) if isinstance(saved_path, str) and saved_path else tmp_path
+                with open(target_path, "rb") as fh:
+                    data = fh.read()
+                if data:
+                    return data
+            except Exception as exc:
+                self._log("Скриншот через tab.save_screenshot не удался: %s", exc)
+            finally:
+                for path in (tmp_path,):
+                    if path and os.path.exists(path):
+                        try:
+                            os.remove(path)
+                        except Exception:
+                            pass
+
+        # 3) CDP fallback: Page.captureScreenshot
         try:
             nodriver = importlib.import_module("nodriver")
             page_domain = getattr(getattr(nodriver, "cdp", None), "page", None)
@@ -97,6 +125,12 @@ class CaptchaSolverNodriver:
 
                         if isinstance(result, (bytes, bytearray)) and result:
                             return bytes(result)
+
+                        if isinstance(result, str) and result:
+                            try:
+                                return base64.b64decode(result)
+                            except (binascii.Error, ValueError):
+                                continue
 
                         payload = result if isinstance(result, dict) else getattr(result, "__dict__", {})
                         data_b64 = payload.get("data") if isinstance(payload, dict) else None
@@ -355,10 +389,7 @@ class CaptchaSolverNodriver:
         """Решает клик-капчу через Anti-Captcha"""
         self._log("Пытаюсь решить клик-капчу через Anti-Captcha...")
 
-        # Проверяем, точно ли это клик-капча
-        html = await self.tab.get_content()
-        html_low = html.lower()
-        if "нажмите в таком порядке" not in html_low:
+        if not await self._wait_click_captcha_prompt(timeout=10.0, step=0.7):
             self._log("Клик-капча не подтверждена по HTML-маркеру, пропускаю Anti-Captcha")
             return False
 
@@ -390,16 +421,14 @@ class CaptchaSolverNodriver:
             self._log("Не удалось получить rect центральной области для пересчёта координат")
             return False
 
-        dpr = await self.tab.evaluate("window.devicePixelRatio || 1", return_by_value=True)
+        dpr = float(await self.tab.evaluate("window.devicePixelRatio || 1", return_by_value=True) or 1.0)
+        if dpr <= 0:
+            dpr = 1.0
 
         for (x_img, y_img) in coords:
             # Пересчёт: из пикселей кропа в CSS-пиксели экрана
-            css_x = rect["left"] + x_img  # / dpr? В кропе координаты уже в пикселях скриншота, которые соответствуют CSS при dpr=1
-            css_y = rect["top"] + y_img
-            # Но из-за dpr скриншот имеет больше пикселей, поэтому координаты в кропе уже умножены на dpr.
-            # Нужно разделить на dpr, чтобы получить CSS-координаты для клика.
-            css_x /= dpr
-            css_y /= dpr
+            css_x = float(rect["left"]) + (float(x_img) / dpr)
+            css_y = float(rect["top"]) + (float(y_img) / dpr)
 
             self._log(
                 "Координата капчи: img=(%s,%s) -> css=(%.1f,%.1f), dpr=%.2f",
@@ -538,17 +567,37 @@ class CaptchaSolverNodriver:
         except Exception:
             pass
 
+    async def _wait_click_captcha_prompt(self, timeout: float = 10.0, step: float = 0.7) -> bool:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        while loop.time() - started < timeout:
+            try:
+                html = (await self.tab.get_content()).lower()
+            except Exception:
+                html = ""
+
+            if "нажмите в таком порядке" in html:
+                return True
+
+            if not await self._is_captcha_present():
+                return False
+
+            await self._sleep(step)
+        return False
+
     async def _captcha_kind(self) -> str:
         try:
             html = (await self.tab.get_content()).lower()
         except Exception:
             html = ""
 
-        if "нажмите в таком порядке" in html or 'data-testid="submit"' in html:
+        if "нажмите в таком порядке" in html:
             return "click"
         if "перемещайте слайдер" in html or "captcha-slider" in html:
             return "slider"
         if "подтвердите, что запросы отправляли вы" in html or "js-button" in html:
+            return "confirm"
+        if await has_captcha(self.tab):
             return "confirm"
         return "none"
 
@@ -556,13 +605,10 @@ class CaptchaSolverNodriver:
 
     async def _is_captcha_present(self) -> bool:
         """Проверяет наличие любой капчи на странице"""
-        html = await self.tab.get_content()
-        return any(marker in html for marker in [
-            "Подтвердите, что запросы отправляли вы, а не робот",
-            "Перемещайте слайдер",
-            "Нажмите в таком порядке:",
-            'data-testid="submit"'
-        ])
+        try:
+            return bool(await has_captcha(self.tab))
+        except Exception:
+            return False
 
     async def solve_smart(self, max_attempts=3) -> bool:
         """
@@ -582,12 +628,13 @@ class CaptchaSolverNodriver:
                 if await self.solve_puzzle():
                     return True
             elif kind == "confirm":
-                for _ in range(5):
-                    if await self._click_confirm_button():
-                        await self._sleep(1.0)
-                        if not await self._is_captcha_present():
-                            return True
-                    await self._sleep(0.8)
+                clicked = await self._click_confirm_button()
+                if clicked:
+                    await self._sleep(1.5)
+                    if not await self._is_captcha_present():
+                        return True
+                else:
+                    self._log("Confirm-кнопка не найдена/не кликнулась на этой попытке")
 
             await self._sleep(2)
 
