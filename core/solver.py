@@ -244,13 +244,17 @@ class CaptchaSolverNodriver:
 
         # Проверяем, точно ли это клик-капча
         html = await self.tab.get_content()
-        if "Нажмите в таком порядке:" not in html:
+        html_low = html.lower()
+        if "нажмите в таком порядке" not in html_low:
+            self._log("Клик-капча не подтверждена по HTML-маркеру, пропускаю Anti-Captcha")
             return False
 
         # Получаем скриншот области
         crop_bytes = await self._screenshot_crop_center()
         if not crop_bytes:
+            self._log("Не удалось получить скриншот центральной области капчи")
             return False
+        self._log("Скриншот для Anti-Captcha получен, размер=%s байт", len(crop_bytes))
 
         # Отправляем в Anti-Captcha
         task_id = await self._upload_to_anticaptcha(crop_bytes)
@@ -258,14 +262,19 @@ class CaptchaSolverNodriver:
             self._log("Anti-Captcha: task_id не получен")
             return False
 
+        self._log("Anti-Captcha: создана задача task_id=%s", task_id)
+
         coords = await self._get_anticaptcha_result(task_id)
         if not coords:
             self._log("Anti-Captcha: координаты не получены")
             return False
 
+        self._log("Anti-Captcha: получено координат=%s", len(coords))
+
         # Конвертируем координаты из изображения в CSS-координаты окна
         rect = await self._get_captcha_center_rect()
         if not rect:
+            self._log("Не удалось получить rect центральной области для пересчёта координат")
             return False
 
         dpr = await self.tab.evaluate("window.devicePixelRatio || 1", return_by_value=True)
@@ -278,6 +287,15 @@ class CaptchaSolverNodriver:
             # Нужно разделить на dpr, чтобы получить CSS-координаты для клика.
             css_x /= dpr
             css_y /= dpr
+
+            self._log(
+                "Координата капчи: img=(%s,%s) -> css=(%.1f,%.1f), dpr=%.2f",
+                x_img,
+                y_img,
+                css_x,
+                css_y,
+                float(dpr),
+            )
 
             # Двигаем мышь human-like и кликаем
             await self.human.move_mouse_to(self.tab, css_x, css_y)
@@ -296,43 +314,70 @@ class CaptchaSolverNodriver:
         """Загружает изображение в Anti-Captcha и возвращает taskId"""
         b64 = base64.b64encode(image_bytes).decode("utf-8")
         import requests
-        resp = requests.post(
-            "https://api.anti-captcha.com/createTask",
-            json={
-                "clientKey": ANTICAPTCHA_KEY,
-                "task": {
-                    "type": "ImageToCoordinatesTask",
-                    "body": b64,
-                    "comment": "Select objects in specified order",
-                }
+
+        payload = {
+            "clientKey": ANTICAPTCHA_KEY,
+            "task": {
+                "type": "ImageToCoordinatesTask",
+                "body": b64,
+                "comment": "Select objects in specified order",
             },
-            timeout=30
-        )
-        data = resp.json()
-        if data.get("errorId"):
-            self._log("Anti-Captcha createTask error: %s", data)
-            return None
-        return data.get("taskId")
+        }
+
+        for attempt in range(1, 4):
+            try:
+                self._log("Anti-Captcha createTask: попытка %s/3", attempt)
+                resp = await asyncio.to_thread(
+                    requests.post,
+                    "https://api.anti-captcha.com/createTask",
+                    json=payload,
+                    timeout=30,
+                )
+                data = resp.json()
+                if data.get("errorId"):
+                    self._log("Anti-Captcha createTask error: %s", data)
+                    return None
+                task_id = data.get("taskId")
+                if task_id:
+                    return int(task_id)
+                self._log("Anti-Captcha createTask: пустой taskId, ответ=%s", data)
+            except Exception as exc:
+                self._log("Anti-Captcha createTask exception (attempt %s/3): %s", attempt, exc)
+            await asyncio.sleep(1.0)
+        return None
 
     async def _get_anticaptcha_result(self, task_id: int, attempts=60, delay=5) -> Optional[list]:
         """Получает результат от Anti-Captcha (список координат [x,y])"""
         import requests
-        for _ in range(attempts):
-            resp = requests.post(
-                "https://api.anti-captcha.com/getTaskResult",
-                json={"clientKey": ANTICAPTCHA_KEY, "taskId": task_id},
-                timeout=30
-            )
-            data = resp.json()
+        for poll in range(1, attempts + 1):
+            try:
+                resp = await asyncio.to_thread(
+                    requests.post,
+                    "https://api.anti-captcha.com/getTaskResult",
+                    json={"clientKey": ANTICAPTCHA_KEY, "taskId": task_id},
+                    timeout=30,
+                )
+                data = resp.json()
+            except Exception as exc:
+                self._log("Anti-Captcha getTaskResult exception (poll %s/%s): %s", poll, attempts, exc)
+                await asyncio.sleep(delay)
+                continue
+
             if data.get("errorId"):
                 self._log("Anti-Captcha getTaskResult error: %s", data)
                 return None
-            if data.get("status") == "ready":
+
+            status = data.get("status")
+            if status == "ready":
                 sol = data.get("solution", {})
                 coords = sol.get("coordinates")
                 if coords:
                     return [[p["x"], p["y"]] for p in coords]
+                self._log("Anti-Captcha ready без coordinates: %s", data)
                 return None
+
+            if poll == 1 or poll % 3 == 0:
+                self._log("Anti-Captcha task %s: status=%s (poll %s/%s)", task_id, status, poll, attempts)
             await asyncio.sleep(delay)
         return None
 
