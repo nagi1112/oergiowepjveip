@@ -599,8 +599,6 @@ class CaptchaSolverNodriver:
             return "slider"
         if "подтвердите, что запросы отправляли вы" in html or "js-button" in html:
             return "confirm"
-        if await has_captcha(self.tab):
-            return "confirm"
         return "none"
 
     async def _wait_after_confirm_click(self, timeout: float = 12.0, step: float = 0.8) -> str:
