@@ -34,6 +34,8 @@ class CaptchaSolverNodriver:
         self.tab = tab
         self.human = human
         self.logger = logger
+        self._last_confirm_click_ts = 0.0
+        self._confirm_click_cooldown = 12.0
 
     async def _sleep(self, seconds: float):
         """Асинхронный сон с учётом возможного метода tab.wait"""
@@ -601,6 +603,20 @@ class CaptchaSolverNodriver:
             return "confirm"
         return "none"
 
+    async def _wait_after_confirm_click(self, timeout: float = 12.0, step: float = 0.8) -> str:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        last_kind = "confirm"
+
+        while loop.time() - started < timeout:
+            kind = await self._captcha_kind()
+            last_kind = kind
+            if kind != "confirm":
+                return kind
+            await self._sleep(step)
+
+        return last_kind
+
     # ---------- Общий метод ----------
 
     async def _is_captcha_present(self) -> bool:
@@ -628,13 +644,37 @@ class CaptchaSolverNodriver:
                 if await self.solve_puzzle():
                     return True
             elif kind == "confirm":
+                now = asyncio.get_running_loop().time()
+                cooldown_left = self._confirm_click_cooldown - (now - self._last_confirm_click_ts)
+
+                if cooldown_left > 0:
+                    self._log("Confirm в cooldown: жду %.1f сек перед повторным кликом", cooldown_left)
+                    await self._sleep(min(cooldown_left, 1.2))
+                    continue
+
                 clicked = await self._click_confirm_button()
-                if clicked:
-                    await self._sleep(1.5)
-                    if not await self._is_captcha_present():
-                        return True
-                else:
+                if not clicked:
                     self._log("Confirm-кнопка не найдена/не кликнулась на этой попытке")
+                    await self._sleep(1.0)
+                    continue
+
+                self._last_confirm_click_ts = asyncio.get_running_loop().time()
+                next_kind = await self._wait_after_confirm_click(timeout=12.0, step=0.8)
+
+                if next_kind == "none":
+                    return True
+                if next_kind == "click":
+                    if await self.solve_click_captcha():
+                        return True
+                    await self._sleep(1.0)
+                    continue
+                if next_kind == "slider":
+                    if await self.solve_puzzle():
+                        return True
+                    await self._sleep(1.0)
+                    continue
+
+                self._log("Confirm остался активным после ожидания перехода")
 
             await self._sleep(2)
 
