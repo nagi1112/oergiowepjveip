@@ -36,6 +36,7 @@ class CaptchaSolverNodriver:
         self.logger = logger
         self._last_confirm_click_ts = 0.0
         self._confirm_click_cooldown = 12.0
+        self._last_click_crop_meta: Optional[dict[str, float]] = None
 
     async def _sleep(self, seconds: float):
         """Асинхронный сон с учётом возможного метода tab.wait"""
@@ -314,6 +315,7 @@ class CaptchaSolverNodriver:
 
     async def _screenshot_crop_center(self) -> Optional[bytes]:
         """Скриншот центральной области и возврат PNG-байтов"""
+        self._last_click_crop_meta = None
         for attempt in range(1, 4):
             try:
                 full_png = await self._take_screenshot_png()
@@ -368,6 +370,11 @@ class CaptchaSolverNodriver:
                 cropped.save(buf, format="PNG")
                 data = buf.getvalue()
                 if data:
+                    self._last_click_crop_meta = {
+                        "left_px": float(left),
+                        "top_px": float(top),
+                        "dpr": float(dpr),
+                    }
                     self._log(
                         "Кроп капчи: успешно, размер=%s байт, область=(%s,%s)-(%s,%s), dpr=%.2f",
                         len(data),
@@ -418,27 +425,47 @@ class CaptchaSolverNodriver:
         self._log("Anti-Captcha: получено координат=%s", len(coords))
 
         # Конвертируем координаты из изображения в CSS-координаты окна
-        rect = await self._get_captcha_center_rect()
-        if not rect:
-            self._log("Не удалось получить rect центральной области для пересчёта координат")
-            return False
+        crop_meta = self._last_click_crop_meta or {}
+        left_px = float(crop_meta.get("left_px", 0.0))
+        top_px = float(crop_meta.get("top_px", 0.0))
+        dpr = float(crop_meta.get("dpr", 0.0))
 
-        dpr = float(await self.tab.evaluate("window.devicePixelRatio || 1", return_by_value=True) or 1.0)
+        if dpr <= 0:
+            try:
+                dpr = float(await self.tab.evaluate("window.devicePixelRatio || 1", return_by_value=True) or 1.0)
+            except Exception:
+                dpr = 1.0
+
         if dpr <= 0:
             dpr = 1.0
 
+        if left_px <= 0 and top_px <= 0:
+            rect = await self._get_captcha_center_rect()
+            if rect:
+                left_px = float(rect["left"]) * dpr
+                top_px = float(rect["top"]) * dpr
+            else:
+                self._log("Не удалось получить геометрию кропа для пересчёта координат")
+                return False
+
+        if left_px < 0 or top_px < 0:
+            self._log("Некорректная геометрия кропа: left_px=%.1f top_px=%.1f", left_px, top_px)
+            return False
+
         for (x_img, y_img) in coords:
-            # Пересчёт: из пикселей кропа в CSS-пиксели экрана
-            css_x = float(rect["left"]) + (float(x_img) / dpr)
-            css_y = float(rect["top"]) + (float(y_img) / dpr)
+            # Пересчёт: из image-px (кропа) -> css-px окна
+            css_x = (left_px + float(x_img)) / dpr
+            css_y = (top_px + float(y_img)) / dpr
 
             self._log(
-                "Координата капчи: img=(%s,%s) -> css=(%.1f,%.1f), dpr=%.2f",
+                "Координата капчи: img=(%s,%s) -> css=(%.1f,%.1f), dpr=%.2f, offset_px=(%.1f,%.1f)",
                 x_img,
                 y_img,
                 css_x,
                 css_y,
                 float(dpr),
+                left_px,
+                top_px,
             )
 
             # Двигаем мышь human-like и кликаем
