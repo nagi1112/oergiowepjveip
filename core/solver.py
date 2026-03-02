@@ -493,6 +493,28 @@ class CaptchaSolverNodriver:
     async def _get_anticaptcha_result(self, task_id: int, attempts=60, delay=5) -> Optional[list]:
         """Получает результат от Anti-Captcha (список координат [x,y])"""
         import requests
+
+        def normalize_coordinates(raw: Any) -> Optional[list[list[float]]]:
+            if not isinstance(raw, list) or not raw:
+                return None
+
+            normalized: list[list[float]] = []
+            for point in raw:
+                if isinstance(point, dict):
+                    x = point.get("x")
+                    y = point.get("y")
+                elif isinstance(point, (list, tuple)) and len(point) >= 2:
+                    x, y = point[0], point[1]
+                else:
+                    return None
+
+                try:
+                    normalized.append([float(x), float(y)])
+                except Exception:
+                    return None
+
+            return normalized if normalized else None
+
         for poll in range(1, attempts + 1):
             try:
                 resp = await asyncio.to_thread(
@@ -515,8 +537,9 @@ class CaptchaSolverNodriver:
             if status == "ready":
                 sol = data.get("solution", {})
                 coords = sol.get("coordinates")
-                if coords:
-                    return [[p["x"], p["y"]] for p in coords]
+                parsed_coords = normalize_coordinates(coords)
+                if parsed_coords:
+                    return parsed_coords
                 self._log("Anti-Captcha ready без coordinates: %s", data)
                 return None
 

@@ -509,7 +509,13 @@ async def smoke_open_and_close(user_data_dir: Path, headless: bool = False) -> N
                 captcha_detected = await wait_captcha_appearance(tab, timeout=6.0, step=0.4)
                 if captcha_detected:
                     solver = CaptchaSolverNodriver(tab, human, logger)
-                    if await solver.solve_smart(max_attempts=3):
+                    solver_solved = False
+                    try:
+                        solver_solved = await solver.solve_smart(max_attempts=3)
+                    except Exception as exc:
+                        logger.warning("[%s/%s] Ошибка в решателе капчи: %s", index, len(queries_to_run), exc)
+
+                    if solver_solved:
                         logger.info("[%s/%s] Капча успешно решена", index, len(queries_to_run))
                     else:
                         logger.warning("[%s/%s] Не удалось решить капчу за попытки", index, len(queries_to_run))
