@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import inspect
 import io
 import importlib
 import random
@@ -60,6 +61,56 @@ class CaptchaSolverNodriver:
             )
         )
 
+    async def _take_screenshot_png(self) -> Optional[bytes]:
+        """Снимает PNG-скриншот текущей страницы, совместимо с разными версиями nodriver."""
+        # 1) Прямой метод tab.screenshot (если поддерживается)
+        screenshot_method = getattr(self.tab, "screenshot", None)
+        if callable(screenshot_method):
+            try:
+                maybe_data = screenshot_method()
+                data = await maybe_data if inspect.isawaitable(maybe_data) else maybe_data
+                if isinstance(data, (bytes, bytearray)) and data:
+                    return bytes(data)
+            except Exception as exc:
+                self._log("Скриншот через tab.screenshot не удался: %s", exc)
+
+        # 2) CDP fallback: Page.captureScreenshot
+        try:
+            nodriver = importlib.import_module("nodriver")
+            page_domain = getattr(getattr(nodriver, "cdp", None), "page", None)
+            if page_domain is not None:
+                for fn_name in ("capture_screenshot", "captureScreenshot"):
+                    builder = getattr(page_domain, fn_name, None)
+                    if not callable(builder):
+                        continue
+
+                    for kwargs in ({"format_": "png"}, {"format": "png"}, {}):
+                        try:
+                            command = builder(**kwargs)
+                        except TypeError:
+                            continue
+
+                        try:
+                            result = await self.tab.send(command)
+                        except Exception:
+                            continue
+
+                        if isinstance(result, (bytes, bytearray)) and result:
+                            return bytes(result)
+
+                        payload = result if isinstance(result, dict) else getattr(result, "__dict__", {})
+                        data_b64 = payload.get("data") if isinstance(payload, dict) else None
+                        if isinstance(data_b64, str) and data_b64:
+                            try:
+                                return base64.b64decode(data_b64)
+                            except Exception:
+                                continue
+        except Exception as exc:
+            self._log("Скриншот через CDP fallback не удался: %s", exc)
+
+        self._log("Не удалось получить скриншот: нет поддерживаемого API в текущем Tab")
+        return None
+
     # ---------- Пазл-капча ----------
 
     async def _get_canvas_rect(self) -> Optional[dict]:
@@ -85,7 +136,9 @@ class CaptchaSolverNodriver:
             return None
 
         # Скриншот всей страницы
-        screenshot_png = await self.tab.screenshot()  # bytes
+        screenshot_png = await self._take_screenshot_png()
+        if not screenshot_png:
+            return None
         img_full = cv2.imdecode(np.frombuffer(screenshot_png, np.uint8), cv2.IMREAD_COLOR)
 
         # Получаем devicePixelRatio
@@ -227,7 +280,7 @@ class CaptchaSolverNodriver:
         """Скриншот центральной области и возврат PNG-байтов"""
         for attempt in range(1, 4):
             try:
-                full_png = await self.tab.screenshot()
+                full_png = await self._take_screenshot_png()
                 if not full_png:
                     self._log("Кроп капчи: пустой скриншот (attempt %s/3)", attempt)
                     await self._sleep(0.4)
